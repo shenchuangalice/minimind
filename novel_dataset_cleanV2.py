@@ -197,15 +197,47 @@ class NovelDatasetGenerator:
 
         return f"第{total}章"
     def _extract_theme(self, text):
-        """提取简介到第一卷/第一部之间的内容"""
+        """增强版主题提取方法"""
+        # 改进后的正则表达式模式
         theme_pattern = re.compile(
-            r'(?:内容简介|作品大纲)[：:]\n'
-            r'([\s\S]+?)'
-            r'(?=\n{2,}第[\d一二三四五六七八九十百千万]+[卷部]|\n第[^\n]{0,10}章|$)',
+            r'(?:内容简介|作品大纲)[：:]\n*'
+            r'((?:.|\n)+?)'  # 匹配任意字符包括换行
+            r'(?=\n{2,}(?:第[\d一二三四五六七八九十百千万零]+[卷部]|第[^\n]{1,20}章|正文\s*开始|[-=]{4,}|$))',
             flags=re.MULTILINE
         )
-        match = theme_pattern.search(text)
-        return match.group(1).strip()[:500] + '...' if match else ""
+
+        # 预处理文本：合并多余的空白行
+        clean_text = re.sub(r'\n{3,}', '\n\n', text)
+
+        match = theme_pattern.search(clean_text)
+        if not match:
+            return self._fallback_theme_extract(clean_text)  # 备用提取方案
+
+        theme_content = match.group(1).strip()
+
+        # 后处理：清理引言中的章节提示
+        theme_content = re.sub(r'\(第[^\n]+章\)', '', theme_content)  # 移除类似（第一章）的引用
+        theme_content = re.sub(r'请看片花：\n', '', theme_content)   # 移除片花提示
+
+        return textwrap.shorten(theme_content, 500, placeholder='...')
+    def _fallback_theme_extract(self, text):
+        """备用提取方案：提取前5个自然段"""
+        paragraphs = []
+        current_para = []
+
+        for line in text.split('\n'):
+            line = line.strip()
+            if line:
+                current_para.append(line)
+            else:
+                if current_para:
+                    paragraphs.append(' '.join(current_para))
+                    current_para = []
+                if len(paragraphs) >= 5:
+                    break
+
+        # 合并前5段（或实际存在的段落）
+        return textwrap.shorten(' '.join(paragraphs[:5]), 500, placeholder='...')
     def _generate_outline_prompt(self, meta, chapters):
         outline_items = []
         for chapter_num, title, content in chapters:
