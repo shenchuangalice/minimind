@@ -116,48 +116,47 @@ class NovelDatasetGenerator:
 
         return samples
     def _split_chapters(self, text):
-            """最终修正的章节分割方法"""
-            # 增强正则表达式：兼容中文数字和阿拉伯数字
-            chapter_re = re.compile(
-                r'(?:^|\n)(第[0-9一二三四五六七八九十百千万零]+章)\s*([^\n]{1,50})',
-                re.MULTILINE
-            )
+        """修复后的章节分割方法"""
+        # 增强正则表达式：支持中英混合章节格式
+        chapter_re = re.compile(
+            r'(?:^|\n)(第[0-9零一二三四五六七八九十百千万]+章)\s*[-—－~～]?\s*([^\n]{1,50})(?=\n|$)',
+            re.MULTILINE
+        )
 
-            # 移除所有番外和作品相关
-            clean_text = re.sub(
-                r'\n(作品相关|设定集|番外)[\s\S]+?\n(?=第[^\n]{1,10}章)',
-                '\n', text
-            )
+        # 预处理：合并标题行中的重复章节编号
+        clean_text = re.sub(
+            r'(第[0-9零一二三四五六七八九十百千万]+章)(\s*第[\d零一二三四五六七八九十百千万]+章)+',
+            r'\1',
+            text
+        )
 
-            chapters = []
-            matches = list(chapter_re.finditer(clean_text))
+        chapters = []
+        last_end = 0
+        matches = list(chapter_re.finditer(clean_text))
 
-            # 添加调试日志
-            print(f"找到{len(matches)}个章节标题")
-            for match in matches[:3]:
-                print(f"示例标题：{match.group()}")
+        for i in range(len(matches)):
+            current_match = matches[i]
+            title = self._normalize_chapter_title(current_match.group(1)) + " " + current_match.group(2).strip()
 
-            for i in range(len(matches)):
-                # 获取当前章节信息
-                title_num = matches[i].group(1)
-                title_text = matches[i].group(2).strip()
-                full_title = f"{title_num} {title_text}"
+            # 跳过重复标题（如示例中的"第10章 第0章"）
+            if i > 0 and current_match.group(1) == matches[i-1].group(1):
+                continue
 
-                # 获取内容范围
-                start = matches[i].end()
-                end = matches[i+1].start() if i+1 < len(matches) else len(clean_text)
+            # 获取章节内容区间
+            next_start = len(clean_text)
+            if i+1 < len(matches):
+                next_start = matches[i+1].start()
 
-                # 提取并清理内容
-                content = clean_text[start:end].strip()
-                content = re.sub(r'\n{3,}', '\n\n', content)
+            content = clean_text[current_match.end():next_start].strip()
+            content = re.sub(r'\n{3,}', '\n\n', content)  # 合并多余换行
 
-                if len(content) >= self.config['min_content_length']:
-                    chapters.append((full_title, content))
-                    print(f"有效章节：{full_title} | 内容长度：{len(content)}")
-                else:
-                    print(f"跳过短章节：{full_title} | 内容长度：{len(content)}")
+            # 过滤空内容（如示例中的错误章节）
+            if len(content) < 50 and chapters:
+                chapters[-1] = (chapters[-1][0], chapters[-1][1] + "\n\n" + content)
+            else:
+                chapters.append((title, content))
 
-            return chapters
+        return chapters
     def _num_to_chinese(self, num_str):
             """将数字编号转换为中文数字（用于过滤重复标题）"""
             num_map = {
@@ -165,6 +164,35 @@ class NovelDatasetGenerator:
                 '6': '六', '7': '七', '8': '八', '9': '九', '10': '十'
             }
             return ''.join(num_map.get(c, c) for c in num_str if c.isdigit())
+    def _normalize_chapter_title(self, title):
+        """修复中文数字转换"""
+        # 中文数字映射（支持到十万）
+        num_map = {
+            '零':0, '一':1, '二':2, '三':3, '四':4, '五':5,
+            '六':6, '七':7, '八':8, '九':9, '十':10,
+            '百':100, '千':1000, '万':10000
+        }
+
+        # 提取中文数字部分
+        match = re.search(r'第([零一二三四五六七八九十百千万]+)章', title)
+        if not match:
+            return title
+
+        ch_num = match.group(1)
+        total = 0
+        current = 0
+        for c in ch_num:
+            val = num_map.get(c, 0)
+            if val >= 10:
+                if current == 0:
+                    current = 1
+                total += current * val
+                current = 0
+            else:
+                current = current * 10 + val
+        total += current
+
+        return f"第{total}章"
     def _extract_theme(self, text):
             """精确提取内容简介"""
             # 找到简介结束位置（遇到第一个章节或空两行）
