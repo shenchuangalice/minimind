@@ -95,9 +95,29 @@ def train_epoch(epoch, wandb):
             model.train()
 
 
+# def init_model(lm_config):
+#     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
+#     model = MiniMindLM(lm_config).to(args.device)
+#     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
+#     return model, tokenizer
 def init_model(lm_config):
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config).to(args.device)
+
+    # +++ 新增代码：加载已有权重 +++
+    moe_path = '_moe' if lm_config.use_moe else ''
+    ckp = f'{args.save_dir}/pretrain_{lm_config.dim}{moe_path}.pth'
+    if os.path.exists(ckp):  # 检查是否存在已保存的模型
+        state_dict = torch.load(ckp, map_location=args.device)
+        # 处理可能的分布式训练前缀
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+        model.load_state_dict(state_dict, strict=False)
+        Logger(f"Loaded pretrained weights from {ckp}")
+    # +++ 结束新增代码 +++
+
     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     return model, tokenizer
 
@@ -119,8 +139,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MiniMind Pretraining")
     parser.add_argument("--out_dir", type=str, default="out")
     # 若要以最快速度实现zero则epochs设置为1轮；否则应当利用有限的数据训练2~6个epochs。
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=6)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--learning_rate", type=float, default=5e-4)
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--dtype", type=str, default="bfloat16")
@@ -132,13 +152,13 @@ if __name__ == "__main__":
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--warmup_iters", type=int, default=0)
     parser.add_argument("--log_interval", type=int, default=100)
-    parser.add_argument("--save_interval", type=int, default=100)
+    parser.add_argument("--save_interval", type=int, default=1)
     parser.add_argument('--local_rank', type=int, default=-1)
     parser.add_argument('--dim', default=512, type=int)
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
-    parser.add_argument("--data_path", type=str, default="./dataset/pretrain_hq.jsonl")
+    parser.add_argument("--data_path", type=str, default="./dataset/novel_net.jsonl")
     args = parser.parse_args()
 
     lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
