@@ -194,13 +194,15 @@ class NovelDatasetGenerator:
 
         return f"第{total}章"
     def _extract_theme(self, text):
-            """精确提取内容简介"""
-            # 找到简介结束位置（遇到第一个章节或空两行）
-            theme_match = re.search(
-                r'(?:内容简介|作品大纲)[：:]?\n([\s\S]+?)(?=\n{2,}[第卷]|\n第[^\n]{1,10}章|$)',
-                text
-            )
-            return theme_match.group(1).strip()[:500] + '...' if theme_match else ""
+        """提取简介到第一卷/第一部之间的内容"""
+        theme_pattern = re.compile(
+            r'(?:内容简介|作品大纲)[：:]\n'
+            r'([\s\S]+?)'
+            r'(?=\n{2,}第[\d一二三四五六七八九十百千万]+[卷部]|\n第[^\n]{0,10}章|$)',
+            flags=re.MULTILINE
+        )
+        match = theme_pattern.search(text)
+        return match.group(1).strip()[:500] + '...' if match else ""
     def _generate_outline_prompt(self, meta, chapters):
             """生成大纲样本"""
             outline_items = []
