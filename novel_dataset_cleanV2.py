@@ -116,47 +116,50 @@ class NovelDatasetGenerator:
 
         return samples
     def _split_chapters(self, text):
-        """修复后的章节分割方法"""
-        # 增强正则表达式：支持中英混合章节格式
+        # 改进后的正则表达式，支持多种中文数字格式
         chapter_re = re.compile(
-            r'(?:^|\n)(第[0-9零一二三四五六七八九十百千万]+章)\s*[-—－~～]?\s*([^\n]{1,50})(?=\n|$)',
+            r'(?:^|\n)(第[零一二三四五六七八九十百千万]+章)\s*[-—－~～]?\s*([^\n]{1,50})(?=\n|$)',
             re.MULTILINE
         )
 
-        # 预处理：合并标题行中的重复章节编号
-        clean_text = re.sub(
-            r'(第[0-9零一二三四五六七八九十百千万]+章)(\s*第[\d零一二三四五六七八九十百千万]+章)+',
-            r'\1',
-            text
-        )
-
         chapters = []
-        last_end = 0
-        matches = list(chapter_re.finditer(clean_text))
+        matches = list(chapter_re.finditer(text))
 
-        for i in range(len(matches)):
-            current_match = matches[i]
-            title = self._normalize_chapter_title(current_match.group(1)) + " " + current_match.group(2).strip()
+        for i, match in enumerate(matches):
+            raw_title = match.group(1)
+            chapter_num = self._chinese_to_number(raw_title)  # 新增中文转数字方法
+            clean_title = f"第{chapter_num}章 {match.group(2).strip()}"
 
-            # 跳过重复标题（如示例中的"第10章 第0章"）
-            if i > 0 and current_match.group(1) == matches[i-1].group(1):
+            # 获取章节内容
+            next_start = len(text) if i == len(matches)-1 else matches[i+1].start()
+            content = text[match.end():next_start].strip()
+
+            chapters.append((chapter_num, clean_title, content))  # 存储实际章节号
+
+        return sorted(chapters, key=lambda x: x[0])
+    def _chinese_to_number(self, chinese_str):
+        # 完整的中文数字转换逻辑
+        num_map = {
+            '零':0, '一':1, '二':2, '三':3, '四':4, '五':5,
+            '六':6, '七':7, '八':8, '九':9, '十':10,
+            '百':100, '千':1000, '万':10000, '亿':100000000
+        }
+
+        total = 0
+        current = 0
+        for char in chinese_str:
+            if char not in num_map:
                 continue
-
-            # 获取章节内容区间
-            next_start = len(clean_text)
-            if i+1 < len(matches):
-                next_start = matches[i+1].start()
-
-            content = clean_text[current_match.end():next_start].strip()
-            content = re.sub(r'\n{3,}', '\n\n', content)  # 合并多余换行
-
-            # 过滤空内容（如示例中的错误章节）
-            if len(content) < 50 and chapters:
-                chapters[-1] = (chapters[-1][0], chapters[-1][1] + "\n\n" + content)
+            value = num_map[char]
+            if value >= 10:
+                if current == 0:
+                    current = 1
+                total += current * value
+                current = 0
             else:
-                chapters.append((title, content))
-
-        return chapters
+                current = current * 10 + value
+        total += current
+        return total
     def _num_to_chinese(self, num_str):
             """将数字编号转换为中文数字（用于过滤重复标题）"""
             num_map = {
@@ -204,37 +207,29 @@ class NovelDatasetGenerator:
         match = theme_pattern.search(text)
         return match.group(1).strip()[:500] + '...' if match else ""
     def _generate_outline_prompt(self, meta, chapters):
-            """生成大纲样本"""
-            outline_items = []
-            for idx, (title, content) in enumerate(chapters, 1):
-                summary = self._extract_summary(content)
-                outline_items.append(f"第{idx}章 {title}: {summary}")
+        outline_items = []
+        for chapter_num, title, content in chapters:
+            summary = self._extract_summary(content)
+            outline_items.append(f"第{chapter_num}章 {title.split(' ',1)[-1]}: {summary}")
 
-            return self._build_dialogue_pair(
-                self.config['prompt_templates']['outline_request'].format(
-                    genre=meta['genre'],
-                    theme=meta['theme'],
-                    chapter_count=len(chapters)
-                ),
-                "\n".join(outline_items)
-            )
+        return self._build_dialogue_pair(
+            self.config['prompt_templates']['outline_request'].format(
+                genre=meta['genre'],
+                theme=meta['theme'],
+                chapter_count=len(chapters)
+            ),
+            "\n".join(outline_items)
+        )
     def _generate_content_prompts(self, meta, chapters):
-            """生成内容样本"""
-            samples = []
-            for title, content in chapters:
-                # 提取章节前100字作为大纲
-                outline = self._extract_summary(content)
-
-                samples.append(
-                    self._build_dialogue_pair(
-                        self.config['prompt_templates']['content_request'].format(
-                            length=len(content),
-                            outline=f"{title}: {outline}"
-                        ),
-                        content
-                    )
-                )
-            return samples
+        samples = []
+        for chapter_num, title, content in chapters:
+            outline = self._extract_summary(content)
+            prompt = self.config['prompt_templates']['content_request'].format(
+                length=len(content),
+                outline=f"第{chapter_num}章 {outline}"
+            )
+            samples.append(self._build_dialogue_pair(prompt, content))
+        return samples
     def _process_complete_chapter(self, samples, meta, current_content, all_outlines, current_title):
             """修复后的完整章节处理"""
             try:
